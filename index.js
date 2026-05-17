@@ -4,6 +4,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const path = url.pathname;
 
+  // CORS para SharePoint
   res.setHeader("Access-Control-Allow-Origin", "https://bimsys.sharepoint.com");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -13,6 +14,7 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
+  // Endpoint del token
   if (path === "/api/aps-token" || path === "/api/aps-token/") {
     const clientId = process.env.APS_CLIENT_ID;
     const clientSecret = process.env.APS_CLIENT_SECRET;
@@ -51,11 +53,13 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // Root
   if (path === "/" || path === "") {
     res.writeHead(200, { "Content-Type": "text/plain" });
     return res.end("APS Token Backend OK");
   }
 
+  // Cualquier otra ruta
   res.writeHead(404, { "Content-Type": "text/plain" });
   res.end("Not Found");
 });
