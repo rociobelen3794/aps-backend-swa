@@ -1,6 +1,5 @@
 import http from "http";
 
-const ALLOWED_ORIGIN = "https://bimsys.sharepoint.com";
 const APS_TOKEN_URL = "https://developer.api.autodesk.com/authentication/v2/token";
 const APS_BUCKET_KEY = "bimsys_rvt_models";
 
@@ -77,6 +76,7 @@ async function ensureBucketExists(accessToken) {
     })
   });
 
+  // Si ya existe, APS puede devolver 409 y está bien
   if (createResp.ok || createResp.status === 409) {
     return;
   }
@@ -109,9 +109,9 @@ async function handleProcessPending(req, res) {
     }
 
     const accessToken = await getApsToken();
-
     await ensureBucketExists(accessToken);
 
+    // 1) Pedir signed upload URL
     const signedResp = await fetch(
       `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET_KEY}/objects/${encodeURIComponent(fileName)}/signeds3upload?minutesExpiration=15`,
       {
@@ -140,6 +140,7 @@ async function handleProcessPending(req, res) {
       });
     }
 
+    // 2) Subir binario
     const fileBuffer = Buffer.from(fileContentBase64, "base64");
 
     const uploadResp = await fetch(uploadUrl, {
@@ -158,6 +159,7 @@ async function handleProcessPending(req, res) {
 
     const eTag = uploadResp.headers.get("etag");
 
+    // 3) Finalizar upload
     const finalizeResp = await fetch(
       `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET_KEY}/objects/${encodeURIComponent(fileName)}/signeds3upload`,
       {
@@ -186,6 +188,7 @@ async function handleProcessPending(req, res) {
     const objectId = finalizeData.objectId;
     const urn = Buffer.from(objectId).toString("base64").replace(/=/g, "");
 
+    // 4) Lanzar traducción
     const translateResp = await fetch(
       "https://developer.api.autodesk.com/modelderivative/v2/designdata/job",
       {
@@ -267,7 +270,8 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const path = url.pathname;
 
-  res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+  // CORS
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
