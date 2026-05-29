@@ -100,7 +100,7 @@ async function handleApsToken(res) {
 async function handleProcessPending(req, res) {
   try {
     const body = await readJsonBody(req);
-    const { fileName, fileContentBase64 } = body || {};
+    const { fileName, fileUrl } = body || {};
 
     if (!fileName || !fileContentBase64) {
       return sendJson(res, 400, {
@@ -141,7 +141,11 @@ async function handleProcessPending(req, res) {
     }
 
     // 2) Subir binario
-    const fileBuffer = Buffer.from(fileContentBase64, "base64");
+    
+const fileResponse = await fetch(fileUrl);
+const arrayBuffer = await fileResponse.arrayBuffer();
+const fileBuffer = Buffer.from(arrayBuffer);
+
 
     const uploadResp = await fetch(uploadUrl, {
       method: "PUT",
