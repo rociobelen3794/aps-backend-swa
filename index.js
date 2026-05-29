@@ -77,7 +77,6 @@ async function ensureBucketExists(accessToken) {
     })
   });
 
-  // Si ya existe, APS suele devolver conflicto; lo ignoramos y seguimos
   if (createResp.ok || createResp.status === 409) {
     return;
   }
@@ -113,7 +112,6 @@ async function handleProcessPending(req, res) {
 
     await ensureBucketExists(accessToken);
 
-    // 1) Pedir signed upload URL
     const signedResp = await fetch(
       `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET_KEY}/objects/${encodeURIComponent(fileName)}/signeds3upload?minutesExpiration=15`,
       {
@@ -133,7 +131,7 @@ async function handleProcessPending(req, res) {
       });
     }
 
-    const uploadUrl = signedData.urls?.[0];
+    const uploadUrl = signedData.urls && signedData.urls[0];
     const uploadKey = signedData.uploadKey;
 
     if (!uploadUrl || !uploadKey) {
@@ -142,7 +140,6 @@ async function handleProcessPending(req, res) {
       });
     }
 
-    // 2) Subir binario a la signed URL
     const fileBuffer = Buffer.from(fileContentBase64, "base64");
 
     const uploadResp = await fetch(uploadUrl, {
@@ -152,3 +149,150 @@ async function handleProcessPending(req, res) {
       },
       body: fileBuffer
     });
+
+    if (!uploadResp.ok) {
+      return sendJson(res, uploadResp.status, {
+        error: "Error subiendo archivo a la signed URL"
+      });
+    }
+
+    const eTag = uploadResp.headers.get("etag");
+
+    const finalizeResp = await fetch(
+      `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET_KEY}/objects/${encodeURIComponent(fileName)}/signeds3upload`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          uploadKey,
+          eTags: eTag ? [eTag] : [],
+          size: fileBuffer.length
+        })
+      }
+    );
+
+    const finalizeData = await finalizeResp.json();
+
+    if (!finalizeResp.ok) {
+      return sendJson(res, finalizeResp.status, {
+        error: "Error finalizando upload",
+        detail: finalizeData
+      });
+    }
+
+    const objectId = finalizeData.objectId;
+    const urn = Buffer.from(objectId).toString("base64").replace(/=/g, "");
+
+    const translateResp = await fetch(
+      "https://developer.api.autodesk.com/modelderivative/v2/designdata/job",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          input: { urn },
+          output: {
+            formats: [
+              {
+                type: "svf2",
+                views: ["2d", "3d"]
+              }
+            ]
+          }
+        })
+      }
+    );
+
+    const translateData = await translateResp.json();
+
+    if (!translateResp.ok) {
+      return sendJson(res, translateResp.status, {
+        error: "Error lanzando traducción",
+        detail: translateData
+      });
+    }
+
+    return sendJson(res, 200, {
+      urn,
+      objectId,
+      objectKey: fileName,
+      bucketKey: APS_BUCKET_KEY,
+      translation: translateData
+    });
+  } catch (err) {
+    return sendJson(res, 500, {
+      error: "Error en process-pending",
+      detail: String(err)
+    });
+  }
+}
+
+async function handleTranslationStatus(url, res) {
+  try {
+    const urn = url.searchParams.get("urn");
+
+    if (!urn) {
+      return sendJson(res, 400, { error: "Falta urn" });
+    }
+
+    const accessToken = await getApsToken();
+
+    const manifestResp = await fetch(
+      `https://developer.api.autodesk.com/modelderivative/v2/designdata/${encodeURIComponent(urn)}/manifest`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`
+        }
+      }
+    );
+
+    const manifestData = await manifestResp.json();
+
+    return sendJson(res, manifestResp.status, manifestData);
+  } catch (err) {
+    return sendJson(res, 500, {
+      error: "Error consultando translation-status",
+      detail: String(err)
+    });
+  }
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const path = url.pathname;
+
+  res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(200);
+    return res.end();
+  }
+
+  if (path === "/" || path === "") {
+    return sendText(res, 200, "APS Token Backend OK");
+  }
+
+  if ((path === "/api/aps-token" || path === "/api/aps-token/") && req.method === "GET") {
+    return handleApsToken(res);
+  }
+
+  if ((path === "/api/process-pending" || path === "/api/process-pending/") && req.method === "POST") {
+    return handleProcessPending(req, res);
+  }
+
+  if ((path === "/api/translation-status" || path === "/api/translation-status/") && req.method === "GET") {
+    return handleTranslationStatus(url, res);
+  }
+
+  return sendText(res, 404, "Not Found");
+});
+
+server.listen(process.env.PORT || 3000);
